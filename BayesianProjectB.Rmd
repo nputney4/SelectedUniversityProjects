@@ -1,0 +1,339 @@
+---
+title: "Bayesian Project B"
+author: "Fausto Conti, Nick Kipfer, Nicholas Putney"
+date: "2023-04-01"
+output: 
+  rmdformats::downcute:
+    code_folding: hide
+    thumbnails: true
+    lightbox: true
+    gallery: false
+---
+# Exercise 1.1
+
+The Data...
+```{r}
+SATy <- c(28,8,-3,7,-1,1,18,12) # \bar y_j 
+SATsigma <- c(15,10,16,11,9,11,10,18) # \sigma_j
+```
+
+
+Sampling from $\tau | y$
+```{r}
+# defining mu_hat, V, tau, which will be needed
+# for defining p(tau | y)
+# ybar and sigma2 are vectors of size j
+# tau2 is a scalar
+tau_p <- function(tau, min, max){ # p(tau)
+  return(dunif(tau, min, max ))
+}
+
+# defining mu_hat - mu_hat is a vector of same length as tau (could be length 1)
+mu_hat <- function(ybar, sigma2, tau) {
+  n <- length(tau)
+  mu_hat <- rep(NA, n)
+  for (i in 1:n) {
+    num <- sum(ybar / (sigma2 + tau[i] ^ 2))
+    denom <- sum(1 / (sigma2 + tau[i] ^ 2))
+    mu_hat[i] <- (num / denom)
+  }
+  return(mu_hat)
+}
+
+# defining V_mu - V_mu is a vector of same length as tau (could be length 1)
+V_mu <- function(sigma2, tau) {
+  n <- length(tau)
+  V_mu <- rep(NA, n)
+  for (i in 1:n) {
+    tot <- sum(1 / (sigma2 + tau[i] ^ 2))
+    V_mu[i] <- 1 / tot
+  }
+  return(V_mu)
+}
+
+# my notation for (x,y)|z will be x_y.z (e.g. mu, tau | y would be mu_tau.y)
+# returns a probability
+tau.y <- function(tau, sigma2, ybar, min, max){
+  mu_hat <- mu_hat(ybar, sigma2, tau)
+  V_mu <- V_mu(sigma2, tau)
+  # function of tau | y
+  n <- length(tau)
+  tau.y <- rep(NA, n)
+  for(i in 1:n){
+    res <- tau_p(tau[i], min, max) * (V_mu[i])^(1/2) * 
+    prod((sigma2 + tau[i]^2)^(-1/2) * 
+    exp((-(ybar - mu_hat[i])^2)/(2 * (sigma2 + tau[i]^2))))
+    tau.y[i] <- res
+  }
+  return(tau.y)
+}
+
+# the below is removing all variables except for tau, so that integrate function is easier, I guess not necessary. 
+tau.y.red <- function(x){
+  mu_hat <- mu_hat(ybar_1, sigma2_1, x)
+  V_mu <- V_mu(sigma2_1, x)
+  n <- length(x)
+  tau.y <- rep(NA, n)
+  for(i in 1:n){
+    res <- tau_p(x[i], min, max) * (V_mu[i])^(1/2) * 
+    prod((sigma2_1 + x[i]^2)^(-1/2) * 
+    exp((-(ybar_1 - mu_hat[i])^2)/(2 * (sigma2_1 + x[i]^2))))
+    tau.y[i] <- res
+  }
+  return(tau.y)
+}
+```
+
+Sampling from the above distribution and then comparing it to the real distribution
+```{r}
+n = 10^5
+min=0.001
+max=30
+ybar_1 <- SATy
+sigma2_1 <- SATsigma^2
+# Grid Sampling
+rdens = function(n=1e5, range, prec=100, tau.y, sigma2, ybar, min, max){
+    grid = seq(from=range[1], to=range[2], by=1/prec)
+    # prob = FUN(grid, ...)
+    prob = sapply(grid, tau.y, sigma2=sigma2, 
+       ybar=ybar, min=min, max=max )
+    s = sample(grid, size=n, prob=prob, replace=TRUE)
+    noise = runif(n, -.5/prec, .5/prec)
+    return(s+noise)
+}
+
+tau.ySamp <- rdens(n=n, range=c(0,30), prec=100, tau.y, sigma2_1, ybar_1, min, max)
+
+tauX <- seq(0, 30, length=1000)
+tau.yVec <- sapply(tauX, tau.y, sigma2=sigma2_1, 
+       ybar=ybar_1, min=min, max=max)
+hist(tau.ySamp, prob=TRUE, breaks="fd", xlab="tau",
+     main = "Tau | y")
+lines(tauX, tau.yVec)
+
+# the distribution is not normalized so cannot be viewed on same axis
+# the below is the function on its own axis, it can be seen the probs are very low :(
+plot(tauX, tau.yVec, type="l", lwd=2, xlab="tau", ylab="prob",
+     main="Tau | y")
+```
+
+
+
+Calculating integrating constant from the function. It is an adaptation of the trapezoid integration function from the solutions of Practical A - 5.2.
+```{r}
+# formula for area of trapezoid is h((b1 + b2)/2)
+# x[2] - x[1] is like the height of the trapezoids
+# the rest follows from some algebraic simplification
+trap = function (f, x) {
+  n = length(x)
+  return ((x[2]-x[1]) * (f(x[1])/2 + sum (f(x[2:(n-1)])) + f(x[n])/2))
+}
+k <- 1/(trap(tau.y.red, tauX))
+```
+
+Plotting again with normalized distribution
+```{r}
+hist(tau.ySamp, prob=TRUE, breaks="fd", ylim = c(0, max(tau.yVec * k)), xlab="tau", main="Tau | y")
+lines(tauX, tau.yVec * k)
+```
+
+The above graphs show the posterior distribution of tau, similar to the one found on slide 13 of the set of slides titled "B4-SAT". The distribution indicates that values near 0 are most probable.
+
+# Exercise 1.2
+Sample from $\mu|\tau,y$ and $\theta|\mu,\tau,y$
+```{r}
+# ybar_j and sigma2_j are scalars, theta_j is a vector of same length as tau or of mu (could be length 1)
+theta_j <- function(ybar_j, sigma2_j, mu, tau) {
+    num <- (ybar_j / sigma2_j + mu / tau ^ 2)
+    denom <- 1 / sigma2_j + 1 / tau ^ 2
+    theta_j <- num / denom
+    return(theta_j)
+}
+
+# V_j is a vector of same length as tau (could be length 1)
+V_j <- function(sigma2_j, tau) {
+  n <- length(tau)
+  V_j <- rep(NA, n)
+  for (i in 1:n) {
+    V_j[i] <- 1 / (1 / sigma2_j + 1 / tau[i] ^ 2)
+  }
+  return(V_j)
+}
+
+# sample from mu | tau, y
+mu.tau_y_SAMP <- function(n, tau, ybar, sigma2){
+  mu_hat_samp <- mu_hat(ybar, sigma2, tau)
+  V_mu_samp <- V_mu(sigma2, tau)
+  rnorm(n, mean = mu_hat_samp, sd = sqrt(V_mu_samp))
+}
+
+# sample from theta | mu, tau, y
+theta.mu_tau_y_SAMP <- function(n, mu, tau, ybar, sigma2){
+  J <- length(sigma2)
+  sampMatrix <- matrix(ncol=J, nrow=n)
+  for(j in 1:J){
+    theta_j_samp <- theta_j(ybar[j], sigma2[j], mu, tau)
+    V_j_samp <- V_j(sigma2[j], tau)
+    sampMatrix[,j] <- rnorm(n, mean = theta_j_samp, sd = sqrt(V_j_samp))
+  }
+  return(sampMatrix)
+}
+```
+
+# Exericse 1.3
+Sample from $\theta$ | y
+
+To sample $\theta|y$, we follow the idea presented on slide 6, first sampling from $\tau | y$, then $\mu | (\tau, y)$, and finally from $\theta | (\mu, \tau, y)$. 
+
+```{r}
+n = 10^5
+# should sample from tau first
+tau.ySamp <- rdens(n=n, range=c(0,30), prec=100, tau.y, sigma2_1, ybar_1, min, max) # tau | y
+mu.ySamp <- mu.tau_y_SAMP(n, tau=tau.ySamp, ybar_1, sigma2_1) # mu | y
+theta.ySamp <- theta.mu_tau_y_SAMP(n, mu=mu.ySamp, tau=tau.ySamp, ybar_1, sigma2_1) # theta | y
+
+# Creating chart from B4 - slide 17
+dfTheta.y <- matrix(ncol=5, nrow=length(SATy))
+for(i in 1:length(SATy)){
+  dfTheta.y[i,] <- round(quantile(theta.ySamp[,i], probs = c(0.025, 0.25, 0.50, 0.75, 0.975)), 1)
+}
+dfTheta.y <- data.frame(cbind(c("A", "B", "C", "D", "E", "F", "G", "H"), dfTheta.y, SATy, SATsigma))
+colnames(dfTheta.y) <- c("School", "2.5%", "25%", "50%", "75%", "97.5%", "y_j", "sigma_j")
+
+dfTheta.y
+```
+
+The above chart is comparable to the one found on slide 17 - the posterior estimates are a "compromise" between the prior and the likelihood. 
+
+```{r}
+# Plotting all theta_j | y
+par(mfrow=c(2,4))
+for(i in 1:length(SATy)){
+  hist(theta.ySamp[,i], breaks="fd", prob=TRUE,
+       xlab = paste("Theta_", i, sep=""),
+       main = paste("Theta_", i, "| y", sep=" "))
+  abline(v=mean(theta.ySamp[,i]), col="red")
+  text(mean(theta.ySamp[,i]) + 3*sd(theta.ySamp[,i]), 0.05, round(mean(theta.ySamp[,i]),2), col="red")
+}
+```
+
+# Exercise 1.4
+
+Sample from $\theta$ | ($\tau$, y)
+
+Here, the idea is similar to that of 1.3, except we want to condition on $\tau$, so we simulate from $\mu|(\tau, y)$, then $\theta | (\mu, \tau, y)$, with keeping $\tau$ fixed at 5.
+```{r}
+tau.y_SAMPLE <- rdens(n=n, range=c(min,max), prec=100, tau.y, sigma2_1, ybar_1, min, max) # tau | y
+mu.y_SAMPLE <- mu.tau_y_SAMP(n, tau=tau.y_SAMPLE, ybar_1, sigma2_1) # mu | y
+theta.tau_y_SAMPLE <- theta.mu_tau_y_SAMP(n, mu=mu.y_SAMPLE, tau=5, ybar_1, sigma2_1) # theta | tau, y
+
+par(mfrow=c(2,4))
+for(i in 1:length(SATy)){
+  hist(theta.tau_y_SAMPLE[,i], breaks="fd", prob=TRUE,
+       xlab = paste("Theta_", i, sep=""),
+       main = paste("Theta_", i, "| (tau = 5, y)", sep=" "))
+  abline(v=mean(theta.tau_y_SAMPLE[,i]), col="red")
+  text(mean(theta.tau_y_SAMPLE[,i]) + 3*sd(theta.tau_y_SAMPLE[,i]), 
+       0.05, round(mean(theta.tau_y_SAMPLE[,i]),2), col="red")
+}
+```
+
+Comparing the outputs of 1.3 and 1.4 - the centers of the distributions have shifted, as $\theta_j$ depends on tau.
+
+# Exercise 1.5
+Calculating conditional expectations and conditional standard deviations of theta | (tau, y) for $\tau \in (0,30]$
+```{r}
+n <- 10^4
+tauValues <- seq(min,max, length=100) # values of tau for which the expectation and SD will be calculated
+schoolNames <- c("A", "B", "C", "D", "E", "F", "G", "H")
+
+# initiating matrices to put expectations and SDs
+dfExp <- matrix(nrow=length(tauValues), ncol=length(SATy))
+dfSD <- matrix(nrow=length(tauValues), ncol=length(SATy))
+for(i in 1:length(tauValues)){
+  tauSamp <- rdens(n=n, range=c(min,max), prec=100, tau.y, sigma2_1, ybar_1, min, max)
+  muSamp <- mu.tau_y_SAMP(n, tau=tauSamp, ybar_1, sigma2_1)
+  thetaSamp <- theta.mu_tau_y_SAMP(n, mu=muSamp, tau=tauValues[i], ybar_1, sigma2_1) # theta | tau = tauValues[i], y
+  expect <- colMeans(thetaSamp) # expectation of all theta_j for one value of tau
+  standDev <- apply(thetaSamp, 2, sd) # Standard deviations of all theta_j for one value of tau
+  dfExp[i,] <- expect
+  dfSD[i,] <- standDev
+}
+
+dfExp <- data.frame(cbind(tauValues, dfExp))
+colnames(dfExp) <- c("Tau", schoolNames)
+
+dfSD <- data.frame(cbind(tauValues, dfSD))
+colnames(dfSD) <- c("Tau", schoolNames)
+```
+
+Plotting conditional expectations and conditional standard deviations
+```{r}
+
+# Plotting conditional expectations for taus
+xOffset1 <- c(0, 0, 0, 0, 0, 0, 0, 0) # adjusting position of letters of (A, B, C,...H)
+yOffset1 <- c(0, 0, 0.9, 0, -0.9, 0, 0, 0)
+plot(tauValues, dfExp$A, type="l", xlim = c(0, 35), ylim = c(-1, 26),
+     xlab = "tau", ylab = "Estimated Treatment Effects", 
+     main = "Conditional Posterior Mean Treatment Effect", lty=1)
+for(i in 2:ncol(dfExp)){
+  lines(tauValues, dfExp[,i], lty=i)
+  text(30.5 + xOffset1[i-1], dfExp[100, i] + yOffset1[i-1], schoolNames[i-1], cex=0.7)
+}
+# Plotting conditional standard deviations for taus
+xOffset2 <- c(0, -2.5, 0, 0, 0, -2.0, 0, 0) # adjusting position of letters of (A, B, C,...H)
+yOffset2 <- c(0, 0.3, 0, 0, 0, 0.5, 0, 0)
+plot(tauValues, dfSD$A, type="l", ylim=c(3, 18), xlim = c(0,35),
+     xlab = "tau", ylab = "Posterior Standard Deviations", 
+     main = "Conditional Posterior SD of Treatment Effect", lty=1)
+for(i in 2:ncol(dfSD)){
+  lines(tauValues, dfSD[,i], lty=i)
+  text(30.5 + xOffset2[i-1], dfSD[100, i] + yOffset2[i-1], schoolNames[i-1], cex=0.7)
+}
+
+```
+
+The figure above resembles that found on slide 14. It shows that when $\tau$ is low, the posterior conditional means are very close. This makes sense, as tau represents the standard deviation across $\theta_j$. So, a $\tau$ of 0, for example, would indicate that all $\theta_js$ are the same.
+
+As tau increases, the posterior conditional means become closer to the sample means - in fact, as tau approaches infinity, the posterior conditional means equal the sample means because then the posterior distribution only depends on the likelihood. 
+
+# Exercise 1.6
+Approximate the distribution of $max_j\{\theta_j\}|y$ using a histogram and approximate $P(min_j\{\theta_j\}|y)$ and $P(\theta_C < \theta_E|y)$ using your simulations.
+```{r}
+distMax <- apply(theta.ySamp, 1, max) # finding max of each row
+hist(distMax, breaks="fd", prob=TRUE, 
+     main="Distribution of Max Estimate Across Schools", 
+     xlab="Maximum Theta")
+```
+
+The above is the distribution of the max of the $\theta_j|y$ - the effect of the most successful coaching program. 
+
+
+Approximating $P(min_j\{\theta_j\}|y)$ and plotting a histogram...
+```{r}
+distMin <- apply(theta.ySamp, 1, min)
+hist(distMin, breaks="fd", prob=TRUE, 
+     main="Distribution of Minimum Estimate Across Schools", 
+     xlab="Minimum Theta")
+
+```
+
+The above is the distribution of the minimum of the $\theta_j|y$ - the effect of the least successful coaching program. 
+
+```{r}
+lt0 <- mean(distMin < 0)
+print(paste("The chance that the lowest average treatment effect across schools is less than 0 is ", round(lt0,2)*100, "%", sep=""))
+```
+
+
+Approximating $P(\theta_C < \theta_E|y)$ and plotting a histogram...
+```{r}
+CEDist <- theta.ySamp[,3] - theta.ySamp[,5] # theta_C - theta_E 
+hist(CEDist, breaks="fd", prob=TRUE, 
+     main = "Distribution of Theta_C - Theta_E",
+     xlab="Theta_C - Theta_E")
+CltE <- mean(CEDist < 0)
+print(paste("The chance that school C has a lower average treatment effect than school E is ", round(CltE,2)*100, "%", sep=""))
+```
+
+
